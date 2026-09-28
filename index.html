@@ -1,0 +1,319 @@
+<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Payment Tracker</title>
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#0f5c63">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Payments">
+<link rel="apple-touch-icon" href="icon-180.png">
+<style>
+/* ===== STYLES ===== */
+:root{--bg:#eef1f4;--card:#fff;--ink:#17212b;--mut:#62707d;--line:#d9e0e6;--acc:#0f5c63;--onacc:#fff;--ok:#1f7a4d;--warn:#a86400;--bad:#b3261e;font-family:"Avenir Next","Segoe UI",system-ui,sans-serif}
+@media(prefers-color-scheme:dark){:root{--bg:#10171d;--card:#18222b;--ink:#e8eef2;--mut:#93a1ad;--line:#2a3742;--acc:#5fc0c8;--onacc:#0b1a1d;--ok:#5ccb92;--warn:#e5a94a;--bad:#ff8a80}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left)}
+main{max-width:760px;margin:0 auto;padding:16px}
+button,select,input{font:inherit;color:inherit}
+button,select,input{border:1px solid var(--line);background:var(--card);border-radius:10px;padding:8px 12px}
+button{cursor:pointer}button.p{background:var(--acc);color:var(--onacc);border-color:var(--acc)}button.d{color:var(--bad)}
+:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
+.mut{color:var(--mut);font-size:.9rem}.n{font-variant-numeric:tabular-nums}.bad{color:var(--bad)}
+header{display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:12px}
+.chip{padding:4px 10px;border-radius:99px;font-size:.85rem;border:1px solid currentColor;margin-right:8px}
+.chip.ok{color:var(--ok)}.chip.warn,.chip.off{color:var(--warn)}.chip.busy{color:var(--mut)}
+.banner{background:var(--card);border-left:4px solid var(--warn);padding:10px 12px;border-radius:10px;margin-bottom:12px;display:flex;gap:12px;align-items:center;justify-content:space-between}
+.bar{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}.bar select{flex:1;min-width:140px}
+.sum{background:var(--acc);color:var(--onacc);border-radius:18px;padding:18px;margin-bottom:12px}
+.sum.over{background:var(--bad);color:#fff}.big{font-size:2.2rem;font-weight:700;letter-spacing:-.02em}
+.sum .mut{color:inherit;opacity:.8}.flag{font-weight:600;margin:6px 0}
+.weeks{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:8px;margin-top:12px}
+.weeks div{background:rgba(255,255,255,.16);border-radius:10px;padding:8px;display:flex;flex-direction:column}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px;margin-bottom:12px}
+.ch{display:flex;justify-content:space-between;align-items:center;gap:8px}.ch h2{margin:0;font-size:1.15rem}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:8px;margin:10px 0}
+.stats dt{color:var(--mut);font-size:.8rem}.stats dd{margin:0;font-weight:600;font-variant-numeric:tabular-nums}
+ul{list-style:none;padding:0;margin:0 0 10px}
+.pay{display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:8px 0;border-top:1px solid var(--line)}
+.pn{flex:1;min-width:120px;overflow-wrap:anywhere}.pay.paid .pn{color:var(--ok)}.pay.skipped .pn{text-decoration:line-through;color:var(--mut)}
+.pay select{padding:6px}form.add{display:flex;gap:8px;flex-wrap:wrap}form.add input{flex:1;min-width:110px}
+footer{display:flex;gap:8px;flex-wrap:wrap;margin-top:20px}
+.login{text-align:center;padding-top:20vh}.login p{max-width:440px;margin:12px auto}
+dialog{border:none;border-radius:16px;background:var(--card);color:var(--ink);width:min(420px,92vw);padding:18px}
+dialog::backdrop{background:rgba(0,0,0,.45)}dialog label{display:block;margin:10px 0;font-size:.9rem}dialog input{width:100%;margin-top:4px}
+.btns{display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap;margin-top:14px}
+#toast{position:fixed;left:12px;right:12px;bottom:calc(12px + env(safe-area-inset-bottom));max-width:560px;margin:auto;background:var(--ink);color:var(--bg);padding:12px 14px;border-radius:12px;z-index:9}
+</style></head>
+<body>
+<div id="app"></div><dialog id="dlg"></dialog><div id="toast" role="status" hidden></div>
+<script>
+/* ===== 1. CONFIG ===== */
+const YOUR_GOOGLE_CLIENT_ID = '640185267871-p8mm88ect7qdg1g3phmdonksfqj40l22.apps.googleusercontent.com';
+const SHEET_NAME = 'Payment Tracker - Data';
+const SCOPES = 'openid email profile https://www.googleapis.com/auth/drive.file';
+const SAVE_DELAY = 1500;                       // debounce: batch edits into one sync
+const D = 'https://www.googleapis.com/drive/v3', S = 'https://sheets.googleapis.com/v4/spreadsheets';
+const COLS = { Payments:['id','accountId','name','amount','status','createdAt','updatedAt','deletedAt'],
+               Accounts:['id','name','month','startingBalance','createdAt','updatedAt','deletedAt'] };
+const LEGACY = [['debit','Debit Card','2026-10',6000],['tabby','Tabby','2026-10',1205],['november','November Payments','2026-11',null]];
+const STATUSES = ['Pending','Paid','Skipped'];
+
+/* ===== 2. STATE & HELPERS ===== */
+let user=null, token=null, tokenExp=0, tokenClient=null, tokenCb=null, tokP=null, gisP=null;
+let db={accounts:[],payments:[]}, wipedAt=0, sheetId=null, sheetGone=false, checked=false;
+let dirty=false, syncing=false, needReconnect=false, editVer=0, saveTimer=null, retryTimer=null, month=null, pendRender=false, goneOpen=false;
+const $=s=>document.querySelector(s), now=()=>Date.now(), uid=()=>crypto.randomUUID();
+const err=(code,msg)=>Object.assign(new Error(msg||code),{code});
+const K=s=>`pt:${user.sub}:${s}`;                                   // every cache key is namespaced by Google ID
+const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const money=n=>new Intl.NumberFormat('en-AE',{style:'currency',currency:'AED',minimumFractionDigits:2,maximumFractionDigits:2}).format(n||0);
+const parseAmt=v=>{if(v==null||String(v).trim()==='')return null;const n=Number(String(v).replace(/,/g,''));return Number.isFinite(n)&&n>=0?Math.round(n*100)/100:null};
+const monthLabel=m=>new Date(m+'-01T00:00').toLocaleString('en',{month:'long',year:'numeric'});
+const thisMonth=()=>{const d=new Date();return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')};
+const live=a=>a.filter(x=>!x.deletedAt), sum=a=>a.reduce((s,x)=>s+x.amount,0);
+const accts=()=>live(db.accounts).sort((a,b)=>a.createdAt-b.createdAt);
+const pays=id=>live(db.payments).filter(p=>p.accountId===id).sort((a,b)=>a.createdAt-b.createdAt);
+const months=()=>[...new Set(accts().map(a=>a.month))].sort();
+function totals(a){const p=pays(a.id),planned=sum(p.filter(x=>x.status!=='Skipped')),paid=sum(p.filter(x=>x.status==='Paid')),has=a.startingBalance!=null;
+  return{planned,paid,left:planned-paid,has,rem:has?a.startingBalance-planned:null}}
+
+/* ===== 3. SHEETS <-> OBJECTS (formula-injection safe) ===== */
+// Writes use valueInputOption RAW (never parsed as formulas) AND values starting with = + - @ get an apostrophe prefix.
+const cellOut=v=>v==null?'':(typeof v==='string'&&/^[=+\-@]/.test(v)?"'"+v:v);
+const cellIn=v=>typeof v==='string'&&/^'[=+\-@]/.test(v)?v.slice(1):v;
+const toRows=(k,list)=>[COLS[k],...list.map(r=>COLS[k].map(f=>cellOut(r[f])))];
+function fromRows(k,rows){return rows.slice(1).filter(r=>r[0]).map(r=>{const o={};
+  COLS[k].forEach((f,i)=>{let v=cellIn(r[i]);o[f]=v===''||v===undefined?null:v});
+  ['amount','startingBalance','createdAt','updatedAt','deletedAt'].forEach(f=>{if(o[f]!=null)o[f]=Number(o[f])});return o})}
+const validA=a=>a.id&&a.name&&/^\d{4}-\d{2}$/.test(a.month)&&(a.startingBalance==null||Number.isFinite(a.startingBalance));
+const validP=p=>p.id&&p.accountId&&p.name&&Number.isFinite(p.amount)&&p.amount>=0&&(p.status=STATUSES.includes(p.status)||(p.status='Pending'));
+
+/* ===== 4. GOOGLE AUTH (Identity Services token client) ===== */
+const loadGIS=()=>gisP||(gisP=new Promise((res,rej)=>{if(window.google?.accounts?.oauth2)return res();
+  const s=document.createElement('script');s.src='https://accounts.google.com/gsi/client';s.onload=res;s.onerror=()=>{gisP=null;rej(err('offline'))};document.head.appendChild(s)}));
+const whoami=async()=>{const r=await fetch('https://openidconnect.googleapis.com/v1/userinfo',{headers:{Authorization:'Bearer '+token}});if(!r.ok)throw err('auth');return r.json()};
+function ensureToken(interactive=false){
+  if(token&&now()<tokenExp-60000)return Promise.resolve();          // still valid
+  if(!navigator.onLine)return Promise.reject(err('offline'));
+  if(YOUR_GOOGLE_CLIENT_ID.includes('PASTE_'))return Promise.reject(err('config'));
+  if(location.protocol==='file:')return Promise.reject(err('origin'));   // Google rejects file:// pages
+  if(tokP&&!interactive)return tokP;
+  const p=new Promise((res,rej)=>{loadGIS().then(()=>{
+    tokenClient||=google.accounts.oauth2.initTokenClient({client_id:YOUR_GOOGLE_CLIENT_ID,scope:SCOPES,callback:r=>tokenCb(r),
+      error_callback:e=>tokenCb({error:e.type==='popup_failed_to_open'?'popup':e.type==='popup_closed'?'closed':'auth'})});
+    tokenCb=r=>{if(r.error)return rej(err(['popup','closed'].includes(r.error)?r.error:'auth'));
+      if(!google.accounts.oauth2.hasGrantedAllScopes(r,'https://www.googleapis.com/auth/drive.file'))return rej(err('scope'));
+      token=r.access_token;tokenExp=now()+r.expires_in*1000;res()};
+    const o={prompt:interactive?(user?'':'select_account'):''};if(user?.email)o.login_hint=user.email;   // prompt '' = silent when possible
+    tokenClient.requestAccessToken(o)
+  }).catch(rej)}).then(async()=>{if(user){const i=await whoami();if(i.sub!==user.sub){token=null;tokenExp=0;throw err('mismatch')}}});
+  tokP=p;const clear=()=>{if(tokP===p)tokP=null};p.then(clear,clear);return p}
+async function signIn(){try{await ensureToken(true);const i=await whoami();
+  user={sub:i.sub,name:i.name||i.email,email:i.email};localStorage.setItem('pt:session',JSON.stringify(user));boot()}catch(e){user=null;fail(e)}}
+async function reconnect(){try{await ensureToken(true);needReconnect=false;render();sync()}catch(e){fail(e)}}
+async function signOut(){
+  if(dirty&&!await yes('Sign out with unsynced changes?','Some edits have not reached Google Drive yet. Signing out deletes them from this device. Reconnect and let them sync first if you can.','Sign out anyway'))return;
+  const s=user.sub;Object.keys(localStorage).filter(k=>k.startsWith(`pt:${s}:`)).forEach(k=>localStorage.removeItem(k));
+  localStorage.removeItem('pt:session');clearTimeout(saveTimer);clearTimeout(retryTimer);
+  user=null;token=null;tokenExp=0;db={accounts:[],payments:[]};wipedAt=0;sheetId=null;dirty=false;needReconnect=false;month=null;render()}
+
+/* ===== 5. GOOGLE API WRAPPER & DRIVE/SHEETS ===== */
+async function api(url,opt={},retry=true){
+  await ensureToken();let r;
+  try{r=await fetch(url,{...opt,headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'},body:opt.body&&JSON.stringify(opt.body)})}catch{throw err('offline')}
+  if(r.status===401&&retry){tokenExp=0;return api(url,opt,false)}
+  if(r.status===401)throw err('auth');
+  if(r.status===404||(r.status===403&&!/ate.?limit|quota/i.test(await r.clone().text())))throw err('gone');
+  if(r.status===429||r.status===403)throw err('quota');
+  if(!r.ok)throw err('http','HTTP '+r.status);
+  return r.json()}
+const findSheet=async()=>(await api(`${D}/files?q=${encodeURIComponent(`name='${SHEET_NAME}' and mimeType='application/vnd.google-apps.spreadsheet' and trashed=false`)}&orderBy=createdTime&fields=files(id)&pageSize=1`)).files[0]?.id||null;
+const createSheet=async()=>(await api(S,{method:'POST',body:{properties:{title:SHEET_NAME},sheets:['Payments','Accounts','Settings'].map(title=>({properties:{title}}))}})).spreadsheetId;
+async function ensureSheet(){
+  if(sheetGone)throw err('gone');
+  if(!sheetId){sheetId=await findSheet()||await createSheet();localStorage.setItem(K('sheet'),sheetId);checked=true;return sheetId}   // reuse by name, else create
+  if(!checked){const f=await api(`${D}/files/${sheetId}?fields=trashed`);if(f.trashed)throw err('gone');checked=true}
+  return sheetId}
+async function readRemote(id){
+  const r=await api(`${S}/${id}/values:batchGet?ranges=Payments&ranges=Accounts&ranges=Settings&valueRenderOption=UNFORMATTED_VALUE`);
+  const [p,a,s]=r.valueRanges.map(v=>v.values||[]);const set=Object.fromEntries(s.slice(1).map(x=>[x[0],x[1]]));
+  return{payments:fromRows('Payments',p).filter(validP),accounts:fromRows('Accounts',a).filter(validA),wipedAt:Number(set.wipedAt)||0}}
+async function writeRemote(id,snap,w){                                   // one clear + one batched write
+  await api(`${S}/${id}/values:batchClear`,{method:'POST',body:{ranges:['Payments','Accounts','Settings']}});
+  await api(`${S}/${id}/values:batchUpdate`,{method:'POST',body:{valueInputOption:'RAW',data:[
+    {range:'Payments!A1',values:toRows('Payments',snap.payments)},{range:'Accounts!A1',values:toRows('Accounts',snap.accounts)},
+    {range:'Settings!A1',values:[['key','value'],['schema',1],['wipedAt',w]]}]}})}
+
+/* ===== 6. SYNC, MERGE, OFFLINE QUEUE ===== */
+// Newest updatedAt wins per record. Deletions are tombstones (deletedAt) so they win over older copies and never reappear.
+function mergeList(local,remote){const m=new Map(remote.map(r=>[r.id,r]));let push=false;
+  for(const l of local){const r=m.get(l.id);if(!r||(l.updatedAt||0)>(r.updatedAt||0)){m.set(l.id,l);push=true}}return{list:[...m.values()],push}}
+function persist(){if(!user)return;try{localStorage.setItem(K('data'),JSON.stringify({...db,wipedAt}));localStorage.setItem(K('dirty'),dirty?'1':'0')}
+  catch{toast('This device is out of storage space, so changes may not be kept offline. Free some space or export a backup now.')}}
+function mutate(fn){fn();editVer++;dirty=true;persist();render();schedule()}
+function schedule(){clearTimeout(saveTimer);saveTimer=setTimeout(sync,SAVE_DELAY);chip()}
+async function sync(){
+  if(!user||syncing)return;clearTimeout(saveTimer);
+  if(!navigator.onLine){chip();return}
+  syncing=true;chip();const u=user;
+  try{
+    const id=await ensureSheet(),rem=await readRemote(id),w=Math.max(wipedAt,rem.wipedAt);
+    const A=mergeList(db.accounts,rem.accounts),P=mergeList(db.payments,rem.payments),keep=r=>(r.updatedAt||0)>w,before=JSON.stringify(db);
+    db={accounts:A.list.filter(keep),payments:P.list.filter(keep)};wipedAt=w;
+    const dropped=A.list.length+P.list.length>db.accounts.length+db.payments.length,v=editVer,snap=structuredClone(db);
+    if(dirty||A.push||P.push||dropped||w!==rem.wipedAt)await writeRemote(id,snap,w);
+    if(user!==u)return;                                                  // signed out mid-flight
+    if(editVer===v)dirty=false;needReconnect=false;persist();
+    if(JSON.stringify(db)!==before)softRender();else chip();
+    if(dirty)schedule()
+  }catch(e){
+    if(user!==u)return;
+    if(e.code==='gone'){sheetGone=true;handleGone()}
+    else if(['auth','popup','closed','mismatch','scope'].includes(e.code)){needReconnect=true;render()}
+    else if(e.code==='offline'){/* queued: dirty stays true, retried on 'online' */}
+    else{fail(e);retryTimer=setTimeout(sync,60000)}
+  }finally{syncing=false;chip()}}
+async function handleGone(){
+  if(goneOpen)return;goneOpen=true;
+  const r=await ask({title:'Your Google Sheet is missing',text:`"${SHEET_NAME}" was deleted, moved to Trash, or is no longer accessible. Your data is still safe on this device. Recreate the sheet from it, or look for the sheet again (restore it from Drive Trash first if you deleted it by mistake).`,
+    buttons:[{label:'Recreate from this device',v:'new',cls:'p'},{label:'Look for it again',v:'find'}]});
+  goneOpen=false;
+  try{if(r?.v==='new'){sheetId=await createSheet();dirty=true}
+    else if(r?.v==='find'){const id=await findSheet();if(!id)return toast('No sheet with that name was found. Restore it from Drive Trash, or choose "Recreate from this device".');sheetId=id}
+    else return;
+    localStorage.setItem(K('sheet'),sheetId);sheetGone=false;checked=true;persist();sync()}catch(e){fail(e)}}
+addEventListener('online',()=>{chip();sync()});addEventListener('offline',chip);
+document.addEventListener('visibilitychange',()=>{if(user&&document.visibilityState==='visible')sync();else if(user&&dirty)sync()});
+setInterval(()=>{if(user&&!dirty)sync()},90000);
+
+/* ===== 7. ERRORS & DIALOGS ===== */
+function fail(e){const m={
+  offline:"You're offline or Google can't be reached. Your changes are saved on this device and will sync when you're back online.",
+  popup:'Your browser blocked the Google sign-in popup. Allow popups for this site, then tap the button again.',
+  closed:'The Google window was closed before sign-in finished. Tap the button to try again.',
+  auth:'Google did not approve the sign-in. Try again, and choose your Google account when asked.',
+  scope:'Google Drive access was not granted. Sign in again and tick the box that lets this app manage its own files.',
+  mismatch:'That is a different Google account from the one signed in here. Use the original account, or sign out first.',
+  quota:'Google is limiting requests right now. Nothing is lost; the app will retry in a minute.',
+  origin:'Google sign-in does not work when the file is opened from your computer. Open the app from its GitHub Pages address (https://mxdadnan.github.io/...) instead.',
+  config:'This copy of the app has no Google client ID yet. Paste it into YOUR_GOOGLE_CLIENT_ID at the top of index.html.',
+  http:`Google returned an error (${e.message}). Your data is safe on this device. Wait a minute and try again.`,
+  format:'That file is not a Payment Tracker backup. Choose a file exported from this app, or one using the debit/tabby/november format.'};
+  toast(m[e.code]||`Something went wrong (${e.message}). Your data is safe on this device. Reload the page and try again.`)}
+function toast(m){const t=$('#toast');t.textContent=m;t.hidden=false;clearTimeout(t._t);t._t=setTimeout(()=>t.hidden=true,8000)}
+function ask({title,text,fields=[],buttons=[{label:'OK',v:'ok',cls:'p'}]}){return new Promise(res=>{const d=$('#dlg');
+  d.innerHTML=`<form method="dialog"><h2>${esc(title)}</h2>${text?`<p>${esc(text)}</p>`:''}${fields.map(f=>`<label>${esc(f.label)}<input name="${f.n}" value="${esc(f.value??'')}" ${f.attr||''}></label>`).join('')}
+  <div class="btns"><button value="cancel" formnovalidate>Cancel</button>${buttons.map(b=>`<button value="${b.v}" class="${b.cls||''}">${esc(b.label)}</button>`).join('')}</div></form>`;
+  d.returnValue='';d.onclose=()=>res(!d.returnValue||d.returnValue==='cancel'?null:{v:d.returnValue,vals:Object.fromEntries(new FormData(d.querySelector('form')))});d.showModal()})}
+const yes=async(t,x,l='Delete')=>!!await ask({title:t,text:x,buttons:[{label:l,v:'y',cls:'d'}]});
+const NAME='required maxlength="100"',AMT='type="number" inputmode="decimal" min="0" step="0.01"',MON='required pattern="\\d{4}-\\d{2}" placeholder="YYYY-MM"';
+const bad=m=>{toast(m);return null};
+
+/* ===== 8. RENDERING ===== */
+function chip(){const c=$('#chip');if(!c)return;const off=!navigator.onLine;
+  const [t,k]=off?[dirty?'Offline: changes queued':'Offline','off']:syncing?['Saving…','busy']:(dirty||needReconnect)?['Waiting to sync','warn']:['Saved','ok'];c.textContent=t;c.className='chip '+k}
+const softRender=()=>{if(document.activeElement?.closest('#app input'))pendRender=true;else render()};
+document.addEventListener('focusout',()=>{if(pendRender){pendRender=false;setTimeout(render,50)}});
+const payRow=p=>`<li class="pay ${esc(p.status.toLowerCase())}"><span class="pn">${esc(p.name)}</span><span class="n">${money(p.amount)}</span>
+  <select data-act="status" data-id="${esc(p.id)}" aria-label="Status of ${esc(p.name)}">${STATUSES.map(s=>`<option${s===p.status?' selected':''}>${s}</option>`).join('')}</select>
+  <button data-act="editPay" data-id="${esc(p.id)}">Edit</button><button class="d" data-act="delPay" data-id="${esc(p.id)}" aria-label="Delete ${esc(p.name)}">✕</button></li>`;
+function render(){
+  const A=$('#app');
+  if(!user){A.innerHTML=`<main class="login"><h1>Payment Tracker</h1><p>Plan what you owe, mark what you've paid, and see what's left each month. Your data is stored in a sheet in your own Google Drive.</p><button class="p" data-act="login">Continue with Google</button><p class="mut">The app can only open files it creates itself.</p></main>`;return}
+  const ms=months();if(!month||!(ms.includes(month)||month===localStorage.getItem(K('newmonth'))))month=ms[ms.length-1]||null;
+  const opts=[...new Set([...ms,month].filter(Boolean))].sort();
+  let h=`<main><header><div><b>Payment Tracker</b><div>${esc(user.name)}</div><div class="mut">${esc(user.email)}</div></div><div><span id="chip" class="chip"></span><button data-act="signout">Sign out</button></div></header>`;
+  if(needReconnect)h+=`<div class="banner"><span>Your Google connection expired. Your edits are safe on this device and will sync after you reconnect.</span><button class="p" data-act="reconnect">Reconnect Google</button></div>`;
+  if(!live(db.accounts).length){
+    h+=`<section class="card"><h2>Welcome, ${esc(user.name.split(' ')[0])}</h2><p>Start by creating an account: a place your payments come from, like a debit card or a Tabby plan. Then add the payments due from it.</p><button class="p" data-act="addAcct">Create your first account</button> <button data-act="import">Import a backup</button></section>`
+  }else{
+    h+=`<div class="bar"><select data-act="month" aria-label="Month">${opts.map(m=>`<option value="${m}"${m===month?' selected':''}>${monthLabel(m)}</option>`).join('')}</select>
+      <button data-act="newMonth">New month</button><button data-act="renMonth">Rename</button><button class="d" data-act="delMonth">Delete</button></div>`;
+    const list=accts().filter(a=>a.month===month),bal=list.filter(a=>a.startingBalance!=null);
+    if(bal.length){const rem=bal.reduce((s,a)=>s+totals(a).rem,0);
+      h+=`<section class="sum${rem<0?' over':''}"><div class="mut">Combined remaining</div><div class="big n">${money(rem)}</div>${rem<0?`<div class="flag">Over budget by ${money(-rem)}</div>`:''}<div class="weeks">${[1,2,3,4].map(w=>`<div><span class="mut">Week ${w}</span><b class="n">${money(rem/4)}</b></div>`).join('')}</div></section>`}
+    h+=list.map(a=>{const t=totals(a),id=esc(a.id);return`<section class="card"><div class="ch"><h2>${esc(a.name)}</h2><div><button data-act="editAcct" data-id="${id}">Edit</button> <button class="d" data-act="delAcct" data-id="${id}">Delete</button></div></div>
+      <dl class="stats">${t.has?`<div><dt>Starting balance</dt><dd>${money(a.startingBalance)}</dd></div>`:''}<div><dt>Total planned</dt><dd>${money(t.planned)}</dd></div><div><dt>Paid</dt><dd>${money(t.paid)}</dd></div><div><dt>Still to pay</dt><dd>${money(t.left)}</dd></div>${t.has?`<div><dt>Remaining</dt><dd class="${t.rem<0?'bad':''}">${money(t.rem)}</dd></div>`:''}</dl>
+      <ul>${pays(a.id).map(payRow).join('')||'<li class="mut">No payments yet. Add the first one below.</li>'}</ul>
+      <form class="add" data-act="addPay" data-id="${id}"><input name="name" placeholder="Payment name" ${NAME} aria-label="Payment name"><input name="amount" placeholder="Amount" required ${AMT} aria-label="Amount"><button class="p">Add payment</button></form></section>`}).join('')
+      ||'<section class="card"><p>No accounts in this month yet.</p></section>';
+    h+=`<button class="p" data-act="addAcct">Add account</button>`}
+  h+=`<footer><button data-act="export">Export JSON</button><button data-act="import">Import JSON</button>${sheetId?`<a href="https://docs.google.com/spreadsheets/d/${encodeURIComponent(sheetId)}/edit" target="_blank" rel="noopener"><button>Open Google Sheet</button></a>`:''}<button class="d" data-act="wipe">Delete my data</button></footer>
+  <input type="file" id="file" accept="application/json,.json" hidden></main>`;
+  A.innerHTML=h;chip()}
+
+/* ===== 9. ACTIONS ===== */
+async function addAcct(){const r=await ask({title:'New account',text:'Leave the starting balance empty for lists of upcoming payments.',fields:[
+  {n:'name',label:'Name (e.g. Debit Card)',attr:NAME},{n:'bal',label:'Starting balance (AED, optional)',attr:AMT},{n:'month',label:'Month',value:month||thisMonth(),attr:MON}],buttons:[{label:'Create',v:'ok',cls:'p'}]});
+  if(!r)return;const name=r.vals.name.trim(),b=r.vals.bal.trim()===''?null:parseAmt(r.vals.bal);
+  if(!name||(r.vals.bal.trim()!==''&&b===null)||!/^\d{4}-\d{2}$/.test(r.vals.month))return bad('Enter a name, a month like 2026-10, and a balance of 0 or more.');
+  month=r.vals.month;mutate(()=>{const t=now();db.accounts.push({id:uid(),name,month,startingBalance:b,createdAt:t,updatedAt:t,deletedAt:null})})}
+async function editAcct(id){const a=db.accounts.find(x=>x.id===id);const r=await ask({title:'Edit account',fields:[{n:'name',label:'Name',value:a.name,attr:NAME},{n:'bal',label:'Starting balance (AED, optional)',value:a.startingBalance??'',attr:AMT}],buttons:[{label:'Save',v:'ok',cls:'p'}]});
+  if(!r)return;const name=r.vals.name.trim(),b=r.vals.bal.trim()===''?null:parseAmt(r.vals.bal);
+  if(!name||(r.vals.bal.trim()!==''&&b===null))return bad('Enter a name and a balance of 0 or more (or leave the balance empty).');
+  mutate(()=>{a.name=name;a.startingBalance=b;a.updatedAt=now()})}
+async function delAcct(id){const a=db.accounts.find(x=>x.id===id),n=pays(id).length;
+  if(!await yes(`Delete "${a.name}"?`,`This also deletes its ${n} payment${n===1?'':'s'}. It will disappear on your other devices too.`))return;
+  mutate(()=>{const t=now();a.deletedAt=a.updatedAt=t;db.payments.filter(p=>p.accountId===id&&!p.deletedAt).forEach(p=>{p.deletedAt=p.updatedAt=t})})}
+function addPay(f){const name=f.name.value.trim(),amount=parseAmt(f.amount.value);
+  if(!name||amount===null)return bad('Enter a payment name and an amount of 0 or more.');
+  mutate(()=>{const t=now();db.payments.push({id:uid(),accountId:f.dataset.id,name,amount,status:'Pending',createdAt:t,updatedAt:t,deletedAt:null})})}
+async function editPay(id){const p=db.payments.find(x=>x.id===id);const r=await ask({title:'Edit payment',fields:[{n:'name',label:'Name',value:p.name,attr:NAME},{n:'amount',label:'Amount (AED)',value:p.amount,attr:'required '+AMT}],buttons:[{label:'Save',v:'ok',cls:'p'}]});
+  if(!r)return;const name=r.vals.name.trim(),amount=parseAmt(r.vals.amount);if(!name||amount===null)return bad('Enter a name and an amount of 0 or more.');
+  mutate(()=>{p.name=name;p.amount=amount;p.updatedAt=now()})}
+async function delPay(id){const p=db.payments.find(x=>x.id===id);if(await yes(`Delete "${p.name}"?`,'This cannot be undone.'))mutate(()=>{p.deletedAt=p.updatedAt=now()})}
+const monthInput=(title,value)=>ask({title,fields:[{n:'month',label:'Month',value,attr:MON}],buttons:[{label:'Save',v:'ok',cls:'p'}]});
+async function newMonth(){const r=await monthInput('New month',thisMonth());if(!r)return;if(!/^\d{4}-\d{2}$/.test(r.vals.month))return bad('Use the format YYYY-MM, for example 2026-12.');
+  month=r.vals.month;localStorage.setItem(K('newmonth'),month);render()}
+async function renMonth(){const r=await monthInput('Rename month',month);if(!r)return;if(!/^\d{4}-\d{2}$/.test(r.vals.month))return bad('Use the format YYYY-MM, for example 2026-12.');
+  const to=r.vals.month;mutate(()=>{const t=now();accts().filter(a=>a.month===month).forEach(a=>{a.month=to;a.updatedAt=t})});month=to}
+async function delMonth(){const l=accts().filter(a=>a.month===month),n=l.reduce((s,a)=>s+pays(a.id).length,0);
+  if(!await yes(`Delete ${monthLabel(month)}?`,`This deletes ${l.length} account${l.length===1?'':'s'} and ${n} payment${n===1?'':'s'}, on all your devices.`))return;
+  mutate(()=>{const t=now();l.forEach(a=>{a.deletedAt=a.updatedAt=t;db.payments.filter(p=>p.accountId===a.id&&!p.deletedAt).forEach(p=>{p.deletedAt=p.updatedAt=t})})});month=null;render()}
+function exportJSON(){const b=new Blob([JSON.stringify({app:'payment-tracker',version:1,exportedAt:new Date().toISOString(),accounts:live(db.accounts),payments:live(db.payments)},null,2)],{type:'application/json'});
+  const a=document.createElement('a');a.href=URL.createObjectURL(b);a.download='payment-tracker-backup-'+new Date().toISOString().slice(0,10)+'.json';a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000)}
+function parseImport(o){const acc=[],pay=[];let skipped=0;
+  const st=s=>STATUSES.find(x=>x.toLowerCase()===String(s).toLowerCase())||'Pending';
+  const addP=(aid,arr)=>(arr||[]).forEach(p=>{const n=String(p?.name??'').trim(),a=parseAmt(p?.amount);if(!n||a===null){skipped++;return}pay.push({accountId:aid,name:n.slice(0,100),amount:a,status:st(p.status)})});
+  if(o&&LEGACY.some(l=>Array.isArray(o[l[0]])))LEGACY.forEach(([k,name,m,b])=>{if(!Array.isArray(o[k]))return;const id=uid();acc.push({id,name,month:m,startingBalance:b});addP(id,o[k])});
+  else if(o&&Array.isArray(o.accounts)&&Array.isArray(o.payments)){
+    o.accounts.forEach(a=>{const n=String(a?.name??'').trim();if(!n||!/^\d{4}-\d{2}$/.test(a.month)){skipped++;return}acc.push({id:String(a.id),name:n.slice(0,100),month:a.month,startingBalance:a.startingBalance==null?null:parseAmt(a.startingBalance)})});
+    const ids=new Set(acc.map(a=>a.id));o.payments.forEach(p=>{if(ids.has(String(p?.accountId)))addP(String(p.accountId),[p]);else skipped++})}
+  else throw err('format');
+  return{acc,pay,skipped}}
+async function doImport(file){let inc;try{inc=parseImport(JSON.parse(await file.text()))}catch(e){return fail(e.code==='format'?e:err('format'))}
+  let mode='replace';
+  if(live(db.accounts).length){const r=await ask({title:'Import backup',text:`Found ${inc.acc.length} accounts and ${inc.pay.length} payments${inc.skipped?` (${inc.skipped} invalid rows skipped)`:''}. Your tracker already has data. Merge adds to it; Replace deletes what is there first.`,buttons:[{label:'Merge',v:'merge',cls:'p'},{label:'Replace',v:'replace',cls:'d'}]});if(!r)return;mode=r.v}
+  if(inc.acc[0])month=inc.acc[0].month;
+  mutate(()=>{const t=now(),map={};
+    if(mode==='replace')[...db.accounts,...db.payments].forEach(r=>{if(!r.deletedAt)r.deletedAt=r.updatedAt=t});
+    inc.acc.forEach(a=>{const ex=mode==='merge'&&live(db.accounts).find(x=>x.name===a.name&&x.month===a.month);if(ex){map[a.id]=ex.id;return}const id=uid();map[a.id]=id;db.accounts.push({...a,id,createdAt:t,updatedAt:t,deletedAt:null})});
+    inc.pay.forEach(p=>{const aid=map[p.accountId];if(mode==='merge'&&live(db.payments).some(x=>x.accountId===aid&&x.name===p.name&&x.amount===p.amount))return;db.payments.push({...p,id:uid(),accountId:aid,createdAt:t,updatedAt:t,deletedAt:null})})});
+  toast(`Imported ${inc.acc.length} accounts and ${inc.pay.length} payments${inc.skipped?`; skipped ${inc.skipped} invalid rows`:''}.`)}
+async function wipe(){
+  if(!await yes('Delete all your data?','This clears the Google Sheet and this device, and removes the data from your other devices. Export a backup first if you might need it. This cannot be undone.','Delete everything'))return;
+  try{const w=now();if(sheetId){await ensureSheet();await writeRemote(sheetId,{accounts:[],payments:[]},w)}
+    db={accounts:[],payments:[]};wipedAt=w;dirty=false;['data','dirty','newmonth'].forEach(k=>localStorage.removeItem(K(k)));month=null;render();toast('Your data was deleted.')}
+  catch(e){e.code==='offline'?toast('You are offline. Reconnect to the internet to delete the data in Google Drive too, then try again.'):fail(e)}}
+
+/* ===== 10. EVENTS & STARTUP ===== */
+const ACTS={login:signIn,signout:signOut,reconnect,addAcct,editAcct,delAcct,editPay,delPay,newMonth,renMonth,delMonth,export:exportJSON,wipe,import:()=>$('#file').click()};
+const app=$('#app');
+app.addEventListener('click',e=>{const b=e.target.closest('[data-act]');if(!b||['SELECT','FORM'].includes(b.tagName))return;ACTS[b.dataset.act]?.(b.dataset.id)});
+app.addEventListener('change',e=>{const t=e.target;
+  if(t.id==='file'&&t.files[0]){doImport(t.files[0]);t.value=''}
+  else if(t.dataset.act==='month'){month=t.value;localStorage.setItem(K('month'),month);render()}
+  else if(t.dataset.act==='status'){const p=db.payments.find(x=>x.id===t.dataset.id);mutate(()=>{p.status=t.value;p.updatedAt=now()})}});
+app.addEventListener('submit',e=>{e.preventDefault();if(e.target.dataset.act==='addPay')addPay(e.target)});
+function boot(){                                   // load ONLY this user's cache, render, then sync
+  let c=null;try{c=JSON.parse(localStorage.getItem(K('data')))}catch{}
+  db={accounts:c?.accounts||[],payments:c?.payments||[]};wipedAt=c?.wipedAt||0;dirty=localStorage.getItem(K('dirty'))==='1';
+  sheetId=localStorage.getItem(K('sheet'));month=localStorage.getItem(K('month'));sheetGone=false;checked=false;render();sync()}
+(function init(){
+  if('serviceWorker' in navigator)navigator.serviceWorker.register('sw.js').catch(()=>{});
+  loadGIS().catch(()=>{});
+  try{user=JSON.parse(localStorage.getItem('pt:session'))}catch{user=null}
+  user?.sub?boot():(user=null,render())})();
+</script></body></html>
